@@ -3518,6 +3518,215 @@ def send_to_notifications(
     return results
 
 
+def build_feishu_card(
+    report_data: Dict,
+    update_info: Optional[Dict] = None,
+    mode: str = "daily",
+    batch_info: Optional[str] = None,
+) -> Dict:
+    """构建飞书卡片消息"""
+    now = get_beijing_time()
+    elements = []
+    
+    # 卡片标题
+    title = "📊 热点词汇统计"
+    if batch_info:
+        title = f"{title} {batch_info}"
+    
+    # 处理热点词汇统计
+    if report_data["stats"]:
+        total_count = len(report_data["stats"])
+        
+        for i, stat in enumerate(report_data["stats"]):
+            word = stat["word"]
+            count = stat["count"]
+            
+            # 根据数量选择图标
+            if count >= 10:
+                icon = "🔥"
+            elif count >= 5:
+                icon = "📈"
+            else:
+                icon = "📌"
+            
+            # 词汇统计标题
+            word_text = f"{icon} [{i + 1}/{total_count}] **{word}** : **{count}** 条"
+            elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": word_text
+                }
+            })
+            
+            # 新闻列表
+            for j, title_data in enumerate(stat["titles"], 1):
+                link_url = title_data["mobile_url"] or title_data["url"]
+                cleaned_title = clean_title(title_data["title"])
+                source_name = title_data["source_name"]
+                time_display = title_data.get("time_display", "")
+                
+                # 构建新闻项
+                news_text = f"{j}. [{source_name}] "
+                if link_url:
+                    news_text += f"[{cleaned_title}]({link_url})"
+                else:
+                    news_text += f"**{cleaned_title}**"
+                
+                # 添加排名显示（卡片消息使用lark_md格式，需要特殊处理）
+                ranks = title_data.get("ranks", [])
+                rank_threshold = title_data.get("rank_threshold", 10)
+                if ranks:
+                    unique_ranks = sorted(set(ranks))
+                    min_rank = unique_ranks[0]
+                    max_rank = unique_ranks[-1]
+                    if min_rank <= rank_threshold:
+                        if min_rank == max_rank:
+                            rank_display = f"**[{min_rank}]**"
+                        else:
+                            rank_display = f"**[{min_rank} - {max_rank}]**"
+                    else:
+                        if min_rank == max_rank:
+                            rank_display = f"[{min_rank}]"
+                        else:
+                            rank_display = f"[{min_rank} - {max_rank}]"
+                    news_text += f" {rank_display}"
+                
+                # 添加时间
+                if time_display:
+                    news_text += f" - {time_display}"
+                
+                # 添加次数
+                if title_data.get("count", 0) > 1:
+                    news_text += f" ({title_data['count']}次)"
+                
+                elements.append({
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": news_text
+                    }
+                })
+            
+            # 添加分隔线（最后一个不添加）
+            if i < len(report_data["stats"]) - 1:
+                elements.append({"tag": "hr"})
+    
+    # 处理新增新闻
+    if report_data.get("new_titles"):
+        elements.append({"tag": "hr"})
+        elements.append({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"🆕 **本次新增热点新闻** (共 {report_data['total_new_count']} 条)"
+            }
+        })
+        
+        for source_data in report_data["new_titles"]:
+            elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"**{source_data['source_name']}** ({len(source_data['titles'])} 条)"
+                }
+            })
+            
+            for j, title_data in enumerate(source_data["titles"], 1):
+                link_url = title_data["mobile_url"] or title_data["url"]
+                cleaned_title = clean_title(title_data["title"])
+                time_display = title_data.get("time_display", "")
+                
+                news_text = f"{j}. "
+                if link_url:
+                    news_text += f"[{cleaned_title}]({link_url})"
+                else:
+                    news_text += f"**{cleaned_title}**"
+                
+                if time_display:
+                    news_text += f" - {time_display}"
+                
+                elements.append({
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": news_text
+                    }
+                })
+    
+    # 处理失败的平台
+    if report_data.get("failed_ids"):
+        elements.append({"tag": "hr"})
+        elements.append({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": "⚠️ **数据获取失败的平台：**"
+            }
+        })
+        for id_value in report_data["failed_ids"]:
+            elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"• **{id_value}**"
+                }
+            })
+    
+    # 如果没有内容
+    if not elements:
+        if mode == "incremental":
+            mode_text = "增量模式下暂无新增匹配的热点词汇"
+        elif mode == "current":
+            mode_text = "当前榜单模式下暂无匹配的热点词汇"
+        else:
+            mode_text = "暂无匹配的热点词汇"
+        elements.append({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"📭 {mode_text}"
+            }
+        })
+    
+    # 添加更新时间
+    elements.append({"tag": "hr"})
+    footer_text = f"🕐 更新时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
+    if update_info:
+        footer_text += f"\n🔄 TrendRadar 发现新版本 **{update_info['remote_version']}**，当前 **{update_info['current_version']}**"
+    
+    elements.append({
+        "tag": "note",
+        "elements": [
+            {
+                "tag": "plain_text",
+                "content": footer_text
+            }
+        ]
+    })
+    
+    # 构建卡片
+    card = {
+        "config": {
+            "wide_screen_mode": True,
+            "enable_forward": True
+        },
+        "header": {
+            "title": {
+                "tag": "plain_text",
+                "content": title
+            },
+            "template": "blue"
+        },
+        "elements": elements
+    }
+    
+    return {
+        "msg_type": "interactive",
+        "card": card
+    }
+
+
 def send_to_feishu(
     webhook_url: str,
     report_data: Dict,
@@ -3526,64 +3735,73 @@ def send_to_feishu(
     proxy_url: Optional[str] = None,
     mode: str = "daily",
 ) -> bool:
-    """发送到飞书（支持分批发送）"""
+    """发送到飞书（使用卡片消息，支持分批发送）"""
     headers = {"Content-Type": "application/json"}
     proxies = None
     if proxy_url:
         proxies = {"http": proxy_url, "https": proxy_url}
 
-    # 获取分批内容，使用飞书专用的批次大小
-    batches = split_content_into_batches(
-        report_data,
-        "feishu",
-        update_info,
-        max_bytes=CONFIG.get("FEISHU_BATCH_SIZE", 29000),
-        mode=mode,
-    )
-
-    print(f"飞书消息分为 {len(batches)} 批次发送 [{report_type}]")
-
-    # 逐批发送
-    for i, batch_content in enumerate(batches, 1):
-        batch_size = len(batch_content.encode("utf-8"))
-        print(
-            f"发送飞书第 {i}/{len(batches)} 批次，大小：{batch_size} 字节 [{report_type}]"
-        )
-
-        # 添加批次标识
-        if len(batches) > 1:
-            batch_header = f"**[第 {i}/{len(batches)} 批次]**\n\n"
-            # 将批次标识插入到适当位置（在统计标题之后）
-            if "📊 **热点词汇统计**" in batch_content:
-                batch_content = batch_content.replace(
-                    "📊 **热点词汇统计**\n\n", f"📊 **热点词汇统计** {batch_header}"
-                )
-            else:
-                # 如果没有统计标题，直接在开头添加
-                batch_content = batch_header + batch_content
-
-        total_titles = sum(
-            len(stat["titles"]) for stat in report_data["stats"] if stat["count"] > 0
-        )
-        now = get_beijing_time()
-
-        payload = {
-            "msg_type": "text",
-            "content": {
-                "total_titles": total_titles,
-                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-                "report_type": report_type,
-                "text": batch_content,
-            },
-        }
-
+    # 由于卡片消息格式更紧凑，可以适当增加批次大小
+    # 但为了安全，我们仍然分批处理，每个批次包含部分统计
+    total_stats = len(report_data.get("stats", []))
+    if total_stats == 0:
+        # 如果没有统计数据，直接发送
+        payload = build_feishu_card(report_data, update_info, mode)
         try:
             response = requests.post(
                 webhook_url, headers=headers, json=payload, proxies=proxies, timeout=30
             )
             if response.status_code == 200:
                 result = response.json()
-                # 检查飞书的响应状态
+                if result.get("StatusCode") == 0 or result.get("code") == 0:
+                    print(f"飞书消息发送成功 [{report_type}]")
+                    return True
+                else:
+                    error_msg = result.get("msg") or result.get("StatusMessage", "未知错误")
+                    print(f"飞书消息发送失败 [{report_type}]，错误：{error_msg}")
+                    return False
+            else:
+                print(f"飞书消息发送失败 [{report_type}]，状态码：{response.status_code}")
+                return False
+        except Exception as e:
+            print(f"飞书消息发送出错 [{report_type}]：{e}")
+            return False
+    
+    # 分批处理统计数据
+    # 每个批次最多包含5个词汇统计（可根据需要调整）
+    batch_size = 5
+    batches = []
+    
+    for i in range(0, total_stats, batch_size):
+        batch_stats = report_data["stats"][i:i + batch_size]
+        batch_report_data = {
+            "stats": batch_stats,
+            "new_titles": report_data.get("new_titles", []) if i == 0 else [],  # 只在第一批次包含新增新闻
+            "failed_ids": report_data.get("failed_ids", []) if i == 0 else [],  # 只在第一批次包含失败信息
+            "total_new_count": report_data.get("total_new_count", 0)
+        }
+        batch_info = f"[第 {i // batch_size + 1}/{(total_stats + batch_size - 1) // batch_size} 批次]" if total_stats > batch_size else None
+        batches.append((batch_report_data, batch_info))
+    
+    print(f"飞书消息分为 {len(batches)} 批次发送 [{report_type}]")
+    
+    # 逐批发送
+    for i, (batch_report_data, batch_info) in enumerate(batches, 1):
+        print(f"发送飞书第 {i}/{len(batches)} 批次 [{report_type}]")
+        
+        payload = build_feishu_card(
+            batch_report_data,
+            update_info if i == len(batches) else None,  # 只在最后一批次包含更新信息
+            mode,
+            batch_info
+        )
+        
+        try:
+            response = requests.post(
+                webhook_url, headers=headers, json=payload, proxies=proxies, timeout=30
+            )
+            if response.status_code == 200:
+                result = response.json()
                 if result.get("StatusCode") == 0 or result.get("code") == 0:
                     print(f"飞书第 {i}/{len(batches)} 批次发送成功 [{report_type}]")
                     # 批次间间隔
@@ -3591,19 +3809,15 @@ def send_to_feishu(
                         time.sleep(CONFIG["BATCH_SEND_INTERVAL"])
                 else:
                     error_msg = result.get("msg") or result.get("StatusMessage", "未知错误")
-                    print(
-                        f"飞书第 {i}/{len(batches)} 批次发送失败 [{report_type}]，错误：{error_msg}"
-                    )
+                    print(f"飞书第 {i}/{len(batches)} 批次发送失败 [{report_type}]，错误：{error_msg}")
                     return False
             else:
-                print(
-                    f"飞书第 {i}/{len(batches)} 批次发送失败 [{report_type}]，状态码：{response.status_code}"
-                )
+                print(f"飞书第 {i}/{len(batches)} 批次发送失败 [{report_type}]，状态码：{response.status_code}")
                 return False
         except Exception as e:
             print(f"飞书第 {i}/{len(batches)} 批次发送出错 [{report_type}]：{e}")
             return False
-
+    
     print(f"飞书所有 {len(batches)} 批次发送完成 [{report_type}]")
     return True
 
